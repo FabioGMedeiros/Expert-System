@@ -5,22 +5,17 @@ import google.generativeai as genai
 import os
 import json
 
-# Importar as palavras-chave 
 from KeyWords import ALL_KEYWORDS_MAPPING
-
-# Importar o motor e os fatos 
-from engine import ConductEvaluationEngine, ConductDescription, ContextFact, HistoryFact, FrequencyFact, ImpactFact, NonVerbalFact, IntentionFact, HierarchicalRelationFact, ConductSeverity, Explanation, GeminiAnalysis
+from engine import ConductEvaluationEngine, ConductDescription, ContextFact, HistoryFact, FrequencyFact, ImpactFact, NonVerbalFact, IntentionFact, HierarchicalRelationFact, ConductSeverity, Explanation, Recommendation, GeminiAnalysis
 
 st.set_page_config(layout="wide", page_title="Sistema Especialista de Avaliação de Condutas UFAPE")
 
 # --- Configuração da API do Gemini ---
 API_KEY = os.getenv("GEMINI_API_KEY")
-
 if not API_KEY:
     st.error("Erro: A chave da API do Gemini (GEMINI_API_KEY) não foi encontrada nas variáveis de ambiente.")
     st.info("Por favor, defina a variável de ambiente no PowerShell/CMD com: `$env:GEMINI_API_KEY=\"SUA_CHAVE_AQUI\"` (temporário) ou adicione-a nas variáveis de ambiente do sistema (permanente).")
     st.stop()
-
 genai.configure(api_key=API_KEY)
 
 # --- Função de chamada do Gemini ---
@@ -33,17 +28,10 @@ def extract_keywords_with_gemini(user_description: str) -> dict:
         keywords_string = "\n".join(keywords_prompt_parts)
         prompt = f"""
         Analise a seguinte descrição de conduta: "{user_description}"
-
-        Com base nas palavras-chave fornecidas abaixo para cada nível de gravidade, identifique:
-        1. O(s) nível(eis) de gravidade que a descrição mais fortemente sugere. Se múltiplos níveis forem sugeridos, priorize o mais alto.
-        2. As palavras-chave exatas (ou sinônimos claros dos conceitos) que você encontrou na descrição que correspondem às listas abaixo.
-
-        Palavras-chave por Nível:
+        Com base nas palavras-chave fornecidas abaixo, identifique o nível de gravidade mais apropriado.
+        Palavras-chave:
         {keywords_string}
-
-        Se a descrição não se encaixar claramente em nenhum dos níveis ou palavras-chave fornecidas, indique "Nenhum Nível Sugerido" e "Nenhuma Palavra-Chave Encontrada".
-
-        Formato da resposta (apenas o JSON, sem texto explicativo adicional):
+        Formato da resposta (apenas JSON, sem texto explicativo adicional):
         ```json
         {{
             "nivel_sugerido": "Nível X" ou "Nenhum Nível Sugerido",
@@ -53,28 +41,20 @@ def extract_keywords_with_gemini(user_description: str) -> dict:
         """
         response = model.generate_content(prompt)
         response_text = response.text.strip()
-        
         if response_text.startswith("```json") and response_text.endswith("```"):
             json_str = response_text[len("```json"): -len("```")].strip()
         else:
             json_str = response_text
-
-        result = json.loads(json_str)
-        return result
+        return json.loads(json_str)
     except Exception as e:
-        st.error(f"Erro ao chamar a API do Gemini ou processar a resposta: {e}")
-        if 'response' in locals() and hasattr(response, 'text'):
-            st.error(f"Resposta bruta do Gemini: {response.text}")
+        st.error(f"Erro ao chamar a API do Gemini: {e}")
         return {"nivel_sugerido": "Nenhum Nível Sugerido", "palavras_chave_encontradas": []}
 
+# --- Função de execução do Sistema Especialista ---
 def run_expert_system(description, context, history, frequency, impact, non_verbal, intention, hierarchical_relation):
-    """
-    Executa o sistema especialista, declarando fatos apenas se eles forem aplicáveis.
-    """
     engine = ConductEvaluationEngine()
     engine.reset()
 
-    # Análise da descrição do usuário pelo Gemini
     st.info("Realizando análise de texto com IA (Gemini)...")
     gemini_result = extract_keywords_with_gemini(description)
     suggested_level = gemini_result.get("nivel_sugerido")
@@ -83,44 +63,27 @@ def run_expert_system(description, context, history, frequency, impact, non_verb
     if suggested_level and suggested_level.startswith("Nível "):
         try:
             level_num = int(suggested_level.split(" ")[1])
-            engine.declare(GeminiAnalysis(
-                suggested_level=level_num,
-                detected_keywords=detected_keywords,
-                analysis_successful=True
-            ))
+            engine.declare(GeminiAnalysis(suggested_level=level_num, detected_keywords=detected_keywords, analysis_successful=True))
             st.success(f"Análise do Gemini concluída. Nível base sugerido: {suggested_level}.")
         except (ValueError, IndexError):
-            st.warning("Gemini sugeriu um nível inválido. A avaliação prosseguirá sem um nível base da IA.")
             engine.declare(GeminiAnalysis(analysis_successful=False))
     else:
-        st.warning("O Gemini não conseguiu sugerir um nível de gravidade claro. A avaliação se baseará nos fatores adicionais.")
         engine.declare(GeminiAnalysis(analysis_successful=False))
 
-    # --- MUDANÇA AQUI: Declarar fatos apenas se a opção não for "na" (Não se aplica) ---
     engine.declare(ConductDescription(text=description))
-    if context != "na":
-        engine.declare(ContextFact(context=context))
-    if history != "na":
-        engine.declare(HistoryFact(history=history))
-    if frequency != "na":
-        engine.declare(FrequencyFact(frequency=frequency))
-    if impact != "na":
-        engine.declare(ImpactFact(impact=impact))
-    if non_verbal != "na":
-        engine.declare(NonVerbalFact(non_verbal=non_verbal))
-    if intention != "na":
-        engine.declare(IntentionFact(intention=intention))
-    if hierarchical_relation != "na":
-        engine.declare(HierarchicalRelationFact(relation=hierarchical_relation))
+    if context != "na": engine.declare(ContextFact(context=context))
+    if history != "na": engine.declare(HistoryFact(history=history))
+    if frequency != "na": engine.declare(FrequencyFact(frequency=frequency))
+    if impact != "na": engine.declare(ImpactFact(impact=impact))
+    if non_verbal != "na": engine.declare(NonVerbalFact(non_verbal=non_verbal))
+    if intention != "na": engine.declare(IntentionFact(intention=intention))
+    if hierarchical_relation != "na": engine.declare(HierarchicalRelationFact(relation=hierarchical_relation))
 
     engine.run()
 
-    # Lógica de coleta de resultados (sem alterações)
-    final_severity = None
-    ia_explanation = None
-    additional_explanations = []
-    
+    final_severity, ia_explanation, additional_explanations, recommendations = None, None, [], []
     all_severity_facts = []
+
     for fact_name, fact_dict in engine.log_facts:
         if fact_name == 'ConductSeverity':
             all_severity_facts.append(ConductSeverity(**fact_dict))
@@ -130,26 +93,24 @@ def run_expert_system(description, context, history, frequency, impact, non_verb
                 ia_explanation = exp['text']
             elif exp['source'] == "Fator Adicional":
                 additional_explanations.append(exp['text'])
+        elif fact_name == 'Recommendation':
+            rec = Recommendation(**fact_dict)
+            recommendations.append(rec['text'])
 
     if all_severity_facts:
         final_severity = all_severity_facts[-1]
 
-    return final_severity, ia_explanation, additional_explanations, engine.log_facts
-
+    return final_severity, ia_explanation, additional_explanations, recommendations, engine.log_facts
 
 # --- Interface Streamlit ---
 st.title("Sistema Especialista para Avaliação de Condutas Inapropriadas - UFAPE")
-st.markdown("Este sistema auxilia na avaliação da gravidade de condutas com foco em assédio e discriminação, baseado no **Guia Matriz Avaliação Gravidade Condutas** da UFAPE.")
+st.markdown("Este sistema auxilia na avaliação da gravidade de condutas, fornecendo um diagnóstico, explicações e recomendações baseadas no **Guia Matriz Avaliação Gravidade Condutas** da UFAPE.")
 
 st.header("1. Descreva a Situação")
-user_description = st.text_area(
-    "Por favor, descreva a conduta ou situação que você deseja avaliar:",
-    height=150,
-    placeholder="Ex: Em uma reunião com toda a equipe, meu chefe fez piadas sobre a minha orientação sexual."
-)
+user_description = st.text_area("Por favor, descreva a conduta ou situação que você deseja avaliar:", height=150, placeholder="Ex: Em uma reunião com toda a equipe, meu chefe fez piadas sobre a minha orientação sexual.")
 
 st.header("2. Fatores Adicionais")
-st.markdown("Selecione as opções que melhor descrevem o contexto da situação para uma avaliação mais precisa, conforme o guia da UFAPE.")
+st.markdown("Selecione as opções que melhor descrevem o contexto da situação para uma avaliação mais precisa.")
 
 col1, col2 = st.columns(2)
 
@@ -213,28 +174,19 @@ with col2:
     }
     selected_hierarchical_relation = st.selectbox("Relação hierárquica:", options=list(hierarchical_relation_options.keys()), format_func=lambda x: hierarchical_relation_options[x], index=0)
 
-
 if st.button("Avaliar Conduta", type="primary"):
     if not user_description:
         st.warning("Por favor, descreva a situação para realizar a avaliação.")
     else:
         with st.spinner("Avaliando a conduta..."):
-            final_severity, ia_explanation, additional_explanations, logged_facts = run_expert_system(
-                user_description,
-                selected_context,
-                selected_history,
-                selected_frequency,
-                selected_impact,
-                selected_non_verbal,
-                selected_intention,
-                selected_hierarchical_relation
+            final_severity, ia_explanation, additional_explanations, recommendations, logged_facts = run_expert_system(
+                user_description, selected_context, selected_history, selected_frequency,
+                selected_impact, selected_non_verbal, selected_intention, selected_hierarchical_relation
             )
-
             st.success("Avaliação Concluída!")
 
             if final_severity:
                 st.subheader("Diagnóstico do Sistema Especialista")
-                
                 if final_severity['level'] > 0:
                     st.markdown(f"### Nível de Gravidade Base: **{final_severity['level']} - {final_severity['description']}**")
                 else:
@@ -251,6 +203,12 @@ if st.button("Avaliar Conduta", type="primary"):
                 else:
                     st.subheader("Análise dos Fatores Adicionais")
                     st.markdown("Nenhum fator adicional com potencial agravante foi selecionado para análise.")
+
+                if recommendations:
+                    st.subheader("Recomendações e Próximos Passos")
+                    st.warning("As seguintes ações são recomendadas com base na gravidade da conduta avaliada:")
+                    for rec in recommendations:
+                        st.markdown(f"➡️ {rec}")
 
                 with st.expander("Ver Rastreabilidade da Inferência (Todos os Fatos Utilizados)"):
                     if logged_facts:

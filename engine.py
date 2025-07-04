@@ -42,13 +42,14 @@ class ConductSeverity(Fact):
 class Explanation(Fact):
     """Fato para armazenar explicações geradas pelo motor de inferência."""
     text = Field(str, mandatory=True)
-    source = Field(str, mandatory=True, default="Base") # "Base" para o nível, "Fator Adicional" para os demais
+    source = Field(str, mandatory=True, default="Base")
+
+class Recommendation(Fact):
+    """Fato para armazenar recomendações e próximos passos."""
+    text = Field(str, mandatory=True)
 
 class GeminiAnalysis(Fact):
-    """
-    Fato que representa a análise da descrição do usuário pelo Gemini,
-    incluindo o nível de gravidade sugerido e as palavras-chave encontradas.
-    """
+    """Fato que representa a análise da descrição do usuário pelo Gemini."""
     suggested_level = Field(int, mandatory=False)
     detected_keywords = Field(list, mandatory=False)
     analysis_successful = Field(bool, mandatory=True, default=False)
@@ -74,9 +75,7 @@ class ConductEvaluationEngine(KnowledgeEngine):
         """Fatos iniciais que podem ser úteis para o motor."""
         yield Fact(system_initialized=True)
 
-    # --- Regras para Níveis de Gravidade (Baseadas na análise do Gemini) ---
-    # Estas regras têm alta prioridade (salience) para definir o nível base inicial.
-
+    # --- Regras de Diagnóstico da Gravidade ---
     @Rule(AS.gemini_data << GeminiAnalysis(analysis_successful=True, suggested_level=W()), ~ConductSeverity(), salience=20)
     def set_base_severity_from_gemini(self, gemini_data):
         """Define o nível de gravidade base com base na análise bem-sucedida do Gemini."""
@@ -99,66 +98,72 @@ class ConductEvaluationEngine(KnowledgeEngine):
             source="Sistema"
         ))
 
-    # --- REGRAS NOVAS: Fatores Adicionais geram EXPLICAÇÕES, não alteram o nível ---
-    # Estas regras verificam os fatos adicionais e adicionam explicações contextuais.
-    # Elas não alteram o nível de gravidade, apenas enriquecem o diagnóstico final.
-
+    # --- Regras de Explicação para Fatores Adicionais ---
     @Rule(ContextFact(context="Local Isolado com Conotação Sexual"))
     def explain_context_sexual(self):
-        # Conforme o guia, locais isolados com conotação sexual aumentam a gravidade e vulnerabilidade.
-        self.declare(Explanation(
-            text="**Fator Agravante (Contexto):** A conduta ocorreu em um local isolado com conotação sexual, o que aumenta a sensação de vulnerabilidade da vítima.",
-            source="Fator Adicional"
-        ))
+        self.declare(Explanation(text="**Fator Agravante (Contexto):** A conduta ocorreu em um local isolado com conotação sexual, o que aumenta a sensação de vulnerabilidade da vítima.", source="Fator Adicional"))
+    
+    @Rule(ContextFact(context="Formal/Público"))
+    def explain_context_formal_public(self):
+        self.declare(Explanation(text="**Fator Contextual:** A conduta ocorreu em um ambiente formal e público. Dependendo do ato, isso pode ampliar o impacto e o constrangimento, representando um exemplo negativo.", source="Fator Adicional"))
         
     @Rule(HistoryFact(history=P(lambda x: x in ["Reincidente", "Frequente"])))
     def explain_history(self):
-        # Um histórico de condutas inapropriadas aumenta a gravidade da avaliação.
-        self.declare(Explanation(
-            text="**Fator Agravante (Histórico):** O agressor possui um histórico de condutas inapropriadas, o que sugere um padrão de comportamento e aumenta a gravidade da situação atual.",
-            source="Fator Adicional"
-        ))
+        self.declare(Explanation(text="**Fator Agravante (Histórico):** O agressor possui um histórico de condutas inapropriadas, o que sugere um padrão de comportamento e aumenta a gravidade da situação atual.", source="Fator Adicional"))
 
     @Rule(FrequencyFact(frequency="Repetitivo e/ou Insistente"))
-    def explain_frequency(self):
-        # Condutas recorrentes são tratadas com mais seriedade.
-        self.declare(Explanation(
-            text="**Fator Agravante (Frequência):** A conduta é repetitiva e/ou insistente, o que pode criar um ambiente de trabalho hostil continuado e é tratado com mais seriedade.",
-            source="Fator Adicional"
-        ))
+    def explain_frequency_repetitive(self):
+        self.declare(Explanation(text="**Fator Agravante (Frequência):** A conduta é repetitiva e/ou insistente, o que pode criar um ambiente de trabalho hostil continuado e é tratado com mais seriedade.", source="Fator Adicional"))
+
+    @Rule(FrequencyFact(frequency="Ocasional"))
+    def explain_frequency_occasional(self):
+        self.declare(Explanation(text="**Fator de Atenção (Frequência):** A conduta ocorreu esporadicamente (mais de uma vez), indicando que não foi um evento totalmente isolado.", source="Fator Adicional"))
 
     @Rule(ImpactFact(impact="Negativo intenso"))
-    def explain_impact(self):
-         # O impacto na vítima é um fator crucial.
-        self.declare(Explanation(
-            text="**Fator Agravante (Impacto):** A conduta teve um impacto negativo intenso na vítima, causando sofrimento de médio/longo prazo, o que é um forte indicador de gravidade.",
-            source="Fator Adicional"
-        ))
+    def explain_impact_intense(self):
+        self.declare(Explanation(text="**Fator Agravante (Impacto):** A conduta teve um impacto negativo intenso na vítima, causando sofrimento de médio/longo prazo, o que é um forte indicador de gravidade.", source="Fator Adicional"))
+
+    @Rule(ImpactFact(impact="Negativo considerável"))
+    def explain_impact_considerable(self):
+        self.declare(Explanation(text="**Fator de Atenção (Impacto):** A conduta gerou consequências de curto prazo e não muito graves à vítima, mas ainda assim teve um impacto negativo considerável.", source="Fator Adicional"))
 
     @Rule(NonVerbalFact(non_verbal="Agravado"))
     def explain_non_verbal(self):
-        # Sinais não-verbais podem intensificar a gravidade.
-        self.declare(Explanation(
-            text="**Fator Agravante (Sinais Não-Verbais):** A conduta foi acompanhada por sinais não-verbais (linguagem corporal, expressões) que intensificaram sua negatividade, sugerindo ameaça ou desprezo.",
-            source="Fator Adicional"
-        ))
+        self.declare(Explanation(text="**Fator Agravante (Sinais Não-Verbais):** A conduta foi acompanhada por sinais não-verbais (linguagem corporal, expressões) que intensificaram sua negatividade, sugerindo ameaça ou desprezo.", source="Fator Adicional"))
 
     @Rule(IntentionFact(intention="Intencional"))
-    def explain_intention(self):
-        # Condutas intencionais são julgadas mais severamente.
-        self.declare(Explanation(
-            text="**Fator Agravante (Intenção):** A conduta foi percebida como intencional, com o objetivo claro de causar dano ou desconforto, o que a torna mais grave do que um mal-entendido.",
-            source="Fator Adicional"
-        ))
+    def explain_intention_intentional(self):
+        self.declare(Explanation(text="**Fator Agravante (Intenção):** A conduta foi percebida como intencional, com o objetivo claro de causar dano ou desconforto, o que a torna mais grave do que um mal-entendido.", source="Fator Adicional"))
+        
+    @Rule(IntentionFact(intention="Negligente"))
+    def explain_intention_negligent(self):
+        self.declare(Explanation(text="**Fator de Atenção (Intenção):** A conduta foi percebida como negligente, indicando uma falta de consideração pelas consequências que o ato poderia causar na vítima.", source="Fator Adicional"))
 
     @Rule(HierarchicalRelationFact(relation=P(lambda x: "Superior" in x)))
     def explain_hierarchy(self):
-        # A dinâmica de poder, especialmente com superioridade hierárquica, intensifica o impacto.
-        self.declare(Explanation(
-            text="**Fator Agravante (Hierarquia):** Existe uma relação hierárquica de superioridade do agressor sobre a vítima. Essa dinâmica de poder intensifica o impacto da conduta e a dificuldade da vítima em se defender.",
-            source="Fator Adicional"
-        ))
+        self.declare(Explanation(text="**Fator Agravante (Hierarquia):** Existe uma relação hierárquica de superioridade do agressor sobre a vítima. Essa dinâmica de poder intensifica o impacto da conduta e a dificuldade da vítima em se defender.", source="Fator Adicional"))
 
+    # --- Regras para Recomendações ---
+    @Rule(ConductSeverity(level=P(lambda x: x in [1, 2])), salience=1)
+    def recommend_level_1_2(self):
+        self.declare(Recommendation(text="**Ação Educativa:** Recomenda-se uma conversa orientativa com o ofensor para esclarecer o impacto de suas ações, mesmo que não intencionais."))
+        self.declare(Recommendation(text="**Mediação:** Se apropriado, uma mediação entre as partes pode ser considerada para resolver mal-entendidos."))
+        self.declare(Recommendation(text="**Monitoramento:** Acompanhar o comportamento para garantir que a conduta não se repita ou escale."))
+
+    @Rule(ConductSeverity(level=P(lambda x: x in [3, 4])), salience=1)
+    def recommend_level_3_4(self):
+        self.declare(Recommendation(text="**Encaminhamento Formal:** Registrar a ocorrência na Ouvidoria e/ou Comissão de Ética para análise formal."))
+        self.declare(Recommendation(text="**Capacitação Obrigatória:** O ofensor deve ser direcionado para cursos e treinamentos obrigatórios sobre assédio, discriminação e respeito no ambiente de trabalho."))
+        self.declare(Recommendation(text="**Advertência Formal:** Considerar a aplicação de uma advertência formal, conforme o regime disciplinar vigente."))
+        self.declare(Recommendation(text="**Apoio à Vítima:** Oferecer suporte psicológico e orientação à vítima sobre seus direitos e os procedimentos institucionais."))
+
+    @Rule(ConductSeverity(level=P(lambda x: x in [5, 6])), salience=1)
+    def recommend_level_5_6(self):
+        self.declare(Recommendation(text="**Ação Imediata:** Garantir a segurança da vítima, o que pode incluir o afastamento temporário do agressor de suas atividades ou do contato com a vítima."))
+        self.declare(Recommendation(text="**Abertura de Processo Disciplinar:** Encaminhar imediatamente a denúncia para a instauração de um Processo Administrativo Disciplinar (PAD) ou similar."))
+        self.declare(Recommendation(text="**Suporte Integral à Vítima:** Oferecer de forma proativa todo o suporte necessário à vítima, incluindo apoio psicológico, jurídico e de segurança."))
+        if self.facts.get(Fact(level=6)):
+             self.declare(Recommendation(text="**Autoridades Externas:** Orientar a vítima a registrar um Boletim de Ocorrência e a buscar as autoridades policiais, dado o caráter criminal da conduta."))
 
     def _get_severity_description(self, level):
         """Auxiliar para obter a descrição do nível de gravidade."""
